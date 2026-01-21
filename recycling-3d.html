@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EcoSorter 3D - Sprite Edition</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap" rel="stylesheet">
+    
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Poppins', sans-serif; background-color: #f0f9ff; }
+        
+        /* UI OVERLAY */
+        #ui-layer {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        /* HEADER */
+        .header {
+            padding: 20px 40px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .brand { 
+            font-size: 28px; font-weight: 800; color: #0f172a; 
+            background: rgba(255,255,255,0.8);
+            padding: 10px 20px; border-radius: 12px;
+            backdrop-filter: blur(5px);
+        }
+        
+        .score-board {
+            background: #ffffff;
+            padding: 10px 30px;
+            border-radius: 50px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            font-size: 24px;
+            font-weight: 800;
+            color: #0f172a;
+        }
+
+        /* FEEDBACK TEXT */
+        #feedback {
+            position: absolute;
+            top: 30%; left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 50px;
+            font-weight: 900;
+            color: #22c55e;
+            opacity: 0;
+            text-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+
+        .footer {
+            text-align: center;
+            padding-bottom: 30px;
+            color: #64748b;
+            font-weight: 600;
+            text-shadow: 0 2px 0 rgba(255,255,255,0.8);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="header">
+            <div class="brand">♻️ EcoSorter</div>
+            <div class="score-board">Score: <span id="score">0</span></div>
+        </div>
+        <div id="feedback">GREAT!</div>
+        <div class="footer">Drag the icon to the correct bin!</div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.9.1/gsap.min.js"></script>
+
+    <script>
+        // --- CONFIGURATION ---
+        const CONFIG = {
+            colors: {
+                paper: 0x3b82f6,    // Blue
+                plastic: 0xf59e0b,  // Orange/Yellow
+                glass: 0x22c55e,    // Green
+                trash: 0x64748b     // Grey
+            }
+        };
+
+        // --- SCENE SETUP ---
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf0f9ff);
+        scene.fog = new THREE.Fog(0xf0f9ff, 10, 40);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+        camera.position.set(0, 6, 14); // Camera slightly higher and further back
+        camera.lookAt(0, 0, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // --- LIGHTING ---
+        const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 0.8);
+        scene.add(hemiLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight.position.set(5, 10, 7);
+        dirLight.castShadow = true;
+        dirLight.shadow.mapSize.width = 1024;
+        dirLight.shadow.mapSize.height = 1024;
+        scene.add(dirLight);
+
+        // --- FLOOR ---
+        const floorGeo = new THREE.PlaneGeometry(100, 100);
+        const floorMat = new THREE.MeshPhongMaterial({ color: 0xffffff, depthWrite: false });
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // --- BIN CREATION HELPER ---
+        const bins = [];
+        const binGroup = new THREE.Group();
+        scene.add(binGroup);
+
+        function createBin(name, color, x, type) {
+            const group = new THREE.Group();
+            
+            // Bin Material
+            const mat = new THREE.MeshPhongMaterial({ 
+                color: color, 
+                shininess: 30,
+                specular: 0x111111
+            });
+            
+            // Dimensions
+            const w = 2.2, h = 3, d = 2.2;
+            const thickness = 0.15;
+
+            // Geometry construction (Hollow box)
+            const parts = [
+                // Floor
+                { geo: new THREE.BoxGeometry(w, thickness, d), pos: [0, thickness/2, 0] },
+                // Back
+                { geo: new THREE.BoxGeometry(w, h, thickness), pos: [0, h/2, -d/2 + thickness/2] },
+                // Front
+                { geo: new THREE.BoxGeometry(w, h, thickness), pos: [0, h/2, d/2 - thickness/2] },
+                // Left
+                { geo: new THREE.BoxGeometry(thickness, h, d - thickness*2), pos: [-w/2 + thickness/2, h/2, 0] },
+                // Right
+                { geo: new THREE.BoxGeometry(thickness, h, d - thickness*2), pos: [w/2 - thickness/2, h/2, 0] },
+            ];
+
+            parts.forEach(part => {
+                const mesh = new THREE.Mesh(part.geo, mat);
+                mesh.position.set(...part.pos);
+                mesh.receiveShadow = true;
+                mesh.castShadow = true;
+                group.add(mesh);
+            });
+
+            // Label (Text on front)
+            const canvas = document.createElement('canvas');
+            canvas.width = 512; canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            
+            // Draw Label Background
+            ctx.fillStyle = "rgba(255,255,255,0.2)";
+            ctx.fillRect(0,0,512,256);
+            
+            // Draw Text
+            ctx.fillStyle = "white"; 
+            ctx.font = "bold 80px Poppins"; 
+            ctx.textAlign = "center"; 
+            ctx.textBaseline = "middle";
+            ctx.fillText(name, 256, 128);
+            
+            const labelTex = new THREE.CanvasTexture(canvas);
+            const label = new THREE.Mesh(
+                new THREE.PlaneGeometry(1.8, 0.9),
+                new THREE.MeshBasicMaterial({ map: labelTex, transparent: true })
+            );
+            label.position.set(0, h/2 + 0.5, d/2 + 0.02); // Slightly protruding
+            group.add(label);
+
+            // Hitbox for raycasting (Invisible box around the bin)
+            const hitboxGeo = new THREE.BoxGeometry(w + 1, h + 2, d + 1);
+            const hitboxMat = new THREE.MeshBasicMaterial({ visible: false, wireframe: true });
+            const hitbox = new THREE.Mesh(hitboxGeo, hitboxMat);
+            hitbox.position.y = h/2;
+            hitbox.userData = { isBin: true, type: type, originalColor: color, parentGroup: group, material: mat };
+            group.add(hitbox);
+
+            group.position.set(x, 0, -2); // Move bins slightly back
+            binGroup.add(group);
+            bins.push(hitbox); // Store the hitbox for collision detection
+        }
+
+        // Create Bins
+        createBin("PAPER", CONFIG.colors.paper, -5, "paper");
+        createBin("PLASTIC", CONFIG.colors.plastic, -1.7, "plastic");
+        createBin("GLASS", CONFIG.colors.glass, 1.7, "glass");
+        createBin("TRASH", CONFIG.colors.trash, 5, "trash");
+
+        // --- SPRITE GENERATOR (Dynamic Images) ---
+        // Instead of external URLs which might break, we draw emojis to canvas
+        function createIconTexture(emoji) {
+            const cvs = document.createElement('canvas');
+            cvs.width = 256; cvs.height = 256;
+            const ctx = cvs.getContext('2d');
+            ctx.font = "200px serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillText(emoji, 128, 140); // Draw emoji
+            return new THREE.CanvasTexture(cvs);
+        }
+
+        const itemsDB = [
+            { type: 'paper', emoji: '📄', texture: createIconTexture('📄') },
+            { type: 'paper', emoji: '📰', texture: createIconTexture('📰') },
+            { type: 'plastic', emoji: '🥤', texture: createIconTexture('🥤') },
+            { type: 'plastic', emoji: '🧴', texture: createIconTexture('🧴') },
+            { type: 'glass', emoji: '🍷', texture: createIconTexture('🍷') },
+            { type: 'glass', emoji: '🫙', texture: createIconTexture('🫙') },
+            { type: 'trash', emoji: '🍎', texture: createIconTexture('🍎') },
+            { type: 'trash', emoji: '🐟', texture: createIconTexture('🐟') }
+        ];
+
+        let activeItem = null;
+        let score = 0;
+        const spawnPos = new THREE.Vector3(0, 3, 4); // Front and center
+
+        function spawnItem() {
+            if(activeItem) scene.remove(activeItem);
+
+            const data = itemsDB[Math.floor(Math.random() * itemsDB.length)];
+
+            // Use THREE.Sprite for "Image" effect (always faces camera)
+            const material = new THREE.SpriteMaterial({ map: data.texture });
+            activeItem = new THREE.Sprite(material);
+            
+            // Scale sprite to look like a reasonable object size
+            activeItem.scale.set(2, 2, 1);
+            activeItem.position.copy(spawnPos);
+            
+            // Store game data
+            activeItem.userData = { 
+                type: data.type,
+                isDraggable: true
+            };
+
+            scene.add(activeItem);
+
+            // Intro animation
+            activeItem.scale.set(0,0,0);
+            gsap.to(activeItem.scale, { x: 2, y: 2, z: 1, duration: 0.5, ease: "back.out" });
+        }
+
+        spawnItem();
+
+        // --- DRAG AND DROP LOGIC (FIXED) ---
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        let isDragging = false;
+        let hoveredBin = null; // Track which bin is currently hovered
+
+        // Invisible plane for dragging items against (at bin depth)
+        const dragPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 2); 
+
+        window.addEventListener('mousemove', onMouseMove);
+        window.addEventListener('mousedown', onMouseDown);
+        window.addEventListener('mouseup', onMouseUp);
+
+        function getMousePos(e) {
+            return {
+                x: (e.clientX / window.innerWidth) * 2 - 1,
+                y: -(e.clientY / window.innerHeight) * 2 + 1
+            };
+        }
+
+        function onMouseDown(e) {
+            const m = getMousePos(e);
+            mouse.set(m.x, m.y);
+            raycaster.setFromCamera(mouse, camera);
+
+            // Check if clicking the item
+            const intersects = raycaster.intersectObject(activeItem);
+            
+            if (intersects.length > 0) {
+                isDragging = true;
+                document.body.style.cursor = "grabbing";
+                // Pop effect
+                gsap.to(activeItem.scale, { x: 2.5, y: 2.5, duration: 0.2 }); 
+            }
+        }
+
+        function onMouseMove(e) {
+            const m = getMousePos(e);
+            mouse.set(m.x, m.y);
+            raycaster.setFromCamera(mouse, camera);
+
+            // 1. Handle Dragging
+            if (isDragging && activeItem) {
+                const target = new THREE.Vector3();
+                // Raycast against the invisible drag plane to get 3D coords
+                raycaster.ray.intersectPlane(dragPlane, target);
+                
+                // Update position (keep Y minimum to avoid going through floor)
+                activeItem.position.set(target.x, Math.max(1, target.y), target.z);
+                
+                checkBinHover(); // Check if we are over a bin
+            } 
+            // 2. Handle Cursor Hover State (Visual only)
+            else {
+                const intersects = raycaster.intersectObject(activeItem);
+                document.body.style.cursor = intersects.length > 0 ? "grab" : "default";
+            }
+        }
+
+        function checkBinHover() {
+            // Raycast from camera to mouse to find bins behind the item
+            const intersects = raycaster.intersectObjects(bins);
+            
+            // Reset previous hover
+            if (hoveredBin) {
+                hoveredBin.object.userData.parentGroup.position.y = 0; // Reset jump
+                hoveredBin.object.userData.material.emissive.setHex(0x000000); // Reset glow
+                hoveredBin = null;
+            }
+
+            if (intersects.length > 0) {
+                // We are hovering a bin!
+                const hit = intersects[0];
+                hoveredBin = hit;
+                
+                // Visual feedback: Light up and Jump
+                const mat = hit.object.userData.material;
+                mat.emissive.setHex(0x555555); // Glow effect
+                hit.object.userData.parentGroup.position.y = 0.5; // Little jump
+            }
+        }
+
+        function onMouseUp() {
+            if (!isDragging) return;
+            isDragging = false;
+            document.body.style.cursor = "default";
+            gsap.to(activeItem.scale, { x: 2, y: 2, duration: 0.2 }); // Reset scale
+
+            if (hoveredBin) {
+                // Logic: Did we drop it on a bin?
+                const binType = hoveredBin.object.userData.type;
+                const itemType = activeItem.userData.type;
+
+                if (binType === itemType) {
+                    handleSuccess(hoveredBin.object);
+                } else {
+                    handleFail();
+                }
+            } else {
+                // Dropped into thin air -> Return to start
+                gsap.to(activeItem.position, { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z, duration: 0.5, ease: "power2.out" });
+            }
+
+            // Reset bin visuals immediately
+            if(hoveredBin) {
+                hoveredBin.object.userData.parentGroup.position.y = 0;
+                hoveredBin.object.userData.material.emissive.setHex(0x000000);
+                hoveredBin = null;
+            }
+        }
+
+        function handleSuccess(binHitbox) {
+            score += 100;
+            document.getElementById('score').innerText = score;
+            showFeedback("CORRECT!", "#22c55e");
+
+            // Suck into bin animation
+            const binPos = binHitbox.parent.position; // Get group position
+            
+            gsap.to(activeItem.position, {
+                x: binHitbox.userData.parentGroup.position.x, // Adjusted for group
+                y: 1.5, // Bin opening height
+                z: binHitbox.userData.parentGroup.position.z,
+                duration: 0.2,
+                onComplete: () => {
+                    // Shrink and disappear
+                    gsap.to(activeItem.scale, { x: 0, y: 0, duration: 0.2 });
+                    gsap.to(activeItem.position, { y: 0, duration: 0.2, onComplete: spawnItem });
+                }
+            });
+            if (score >= 500) { // Win after 5 items
+        triggerGameOver();
+        return; // Stop the code here so it doesn't spawn more items
+    }
+
+        }
+
+        function handleFail() {
+            showFeedback("WRONG BIN!", "#ef4444");
+            // Shake animation
+            gsap.to(activeItem.position, { x: "+=0.5", duration: 0.05, yoyo: true, repeat: 5, onComplete: () => {
+                gsap.to(activeItem.position, { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z, duration: 0.5 });
+            }});
+        }
+
+        function showFeedback(text, color) {
+            const el = document.getElementById('feedback');
+            el.innerText = text;
+            el.style.color = color;
+            el.style.opacity = 1;
+            el.style.top = "40%";
+            setTimeout(() => { 
+                el.style.opacity = 0; 
+                el.style.top = "30%"; // Reset float pos
+            }, 1000);
+        }
+
+        // --- ANIMATION LOOP ---
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Idle animation for item
+            if(activeItem && !isDragging) {
+                activeItem.position.y += Math.sin(Date.now() * 0.003) * 0.005;
+            }
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+function triggerGameOver() {
+    // Stop the game loop
+    activeItem = null; 
+    
+    // Create a Win Screen Overlay
+    const div = document.createElement('div');
+    div.style.position = 'absolute';
+    div.style.top = '0';
+    div.style.left = '0';
+    div.style.width = '100%';
+    div.style.height = '100%';
+    div.style.background = 'rgba(0,0,0,0.85)';
+    div.style.display = 'flex';
+    div.style.flexDirection = 'column';
+    div.style.justifyContent = 'center';
+    div.style.alignItems = 'center';
+    div.style.color = 'white';
+    div.style.zIndex = '100';
+    
+    div.innerHTML = `
+        <h1 style="font-size: 60px; color: #22c55e; margin-bottom: 20px;">CLEAN UP COMPLETE!</h1>
+        <p style="font-size: 30px;">Final Score: ${score}</p>
+        <button onclick="location.reload()" style="margin-top: 30px; padding: 15px 40px; font-size: 24px; border: none; background: #22c55e; color: white; border-radius: 50px; cursor: pointer; font-weight: bold;">Play Again</button>
+    `;
+    
+    document.body.appendChild(div);
+}
+    </script>
+</body>
+</html>
